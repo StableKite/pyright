@@ -848,7 +848,7 @@ export async function openFile(info: PyrightServerInfo, markerName: string, text
 
     text = text ?? info.testData.files.find((f) => f.fileName === marker.fileName)!.content;
 
-    info.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+    await info.connection.sendNotification(DidOpenTextDocumentNotification.type, {
         textDocument: { uri, languageId: 'python', version: 1, text },
     });
 

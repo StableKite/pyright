@@ -128,7 +128,7 @@ describe(`Basic language server tests`, () => {
             });
         }
 
-        openFile(info, 'marker');
+        await openFile(info, 'marker');
         const result = await hover(info, 'marker');
         assert(result && MarkupContent.is(result.contents));
         assert.strictEqual(result.contents.value, '```python\n(module) os\n```');
@@ -142,7 +142,7 @@ describe(`Basic language server tests`, () => {
         const info = await runLanguageServer(DEFAULT_WORKSPACE_ROOT, code, /* callInitialize */ true);
 
         // Do simple hover request
-        openFile(info, 'marker');
+        await openFile(info, 'marker');
         const hoverResult = await hover(info, 'marker');
         assert(hoverResult);
         assert(MarkupContent.is(hoverResult.contents));
@@ -157,7 +157,7 @@ describe(`Basic language server tests`, () => {
         const info = await runLanguageServer(DEFAULT_WORKSPACE_ROOT, code, /* callInitialize */ true);
 
         // Do simple completion request
-        openFile(info, 'marker');
+        await openFile(info, 'marker');
         const marker = info.testData.markerPositions.get('marker')!;
         const fileUri = marker.fileUri;
         const text = info.testData.files.find((d) => d.fileName === marker.fileName)!.content;
