@@ -8142,9 +8142,10 @@ export function createTypeEvaluator(
                         !ClassType.isBuiltIn(concreteSubtype.shared.effectiveMetaclass, ['type', '_InitVarMeta']) &&
                         (flags & EvalFlags.InstantiableType) === 0
                     ) {
+                        const itemMethodName = getIndexAccessMagicMethodName(usage);
                         const itemMethodType = getBoundMagicMethod(
                             concreteSubtype,
-                            getIndexAccessMagicMethodName(usage),
+                            itemMethodName,
                             /* selfType */ undefined,
                             node.d.leftExpr
                         );
@@ -8160,7 +8161,13 @@ export function createTypeEvaluator(
                             );
                         }
 
-                        if (itemMethodType) {
+                        // An existing method that cannot bind to this class must
+                        // report an invalid index operation rather than falling
+                        // through to generic or enum indexing.
+                        if (
+                            itemMethodType ||
+                            lookUpClassMember(concreteSubtype.shared.effectiveMetaclass, itemMethodName)
+                        ) {
                             return getTypeOfIndexedObjectOrClass(node, concreteSubtype, selfType, usage).type;
                         }
                     }
@@ -9735,6 +9742,9 @@ export function createTypeEvaluator(
             let reportError = false;
 
             doForEachSubtype(secondArgConcreteType, (secondArgSubtype) => {
+                const secondArgMetaclass = isInstantiableClass(secondArgSubtype)
+                    ? secondArgSubtype.shared.effectiveMetaclass
+                    : undefined;
                 if (isAnyOrUnknown(secondArgSubtype)) {
                     // Ignore unknown or any types.
                 } else if (isClassInstance(secondArgSubtype)) {
@@ -9752,13 +9762,22 @@ export function createTypeEvaluator(
                     bindToType = secondArgSubtype;
                 } else if (isInstantiableClass(secondArgSubtype)) {
                     if (isInstantiableClass(concreteTargetClassType)) {
+                        const metaclass = secondArgMetaclass;
+                        const hasOwnerMetaclass =
+                            isInstantiableMetaclass(concreteTargetClassType) &&
+                            metaclass &&
+                            isInstantiableClass(metaclass) &&
+                            metaclass.shared.mro.some(
+                                (base) => isClass(base) && ClassType.isSameGenericClass(base, concreteTargetClassType)
+                            );
                         if (
                             !ClassType.isBuiltIn(concreteTargetClassType, 'type') &&
                             !derivesFromClassRecursive(
                                 secondArgSubtype,
                                 concreteTargetClassType,
                                 /* ignoreUnknown */ true
-                            )
+                            ) &&
+                            !hasOwnerMetaclass
                         ) {
                             reportError = true;
                         }
@@ -9866,8 +9885,38 @@ export function createTypeEvaluator(
                 bindToType = selfSpecializeClass(bindToType, { useBoundTypeVars: true });
             }
 
+            // A class object can be an instance of the target metaclass without
+            // deriving from it. Search the metaclass MRO in that case, retaining
+            // the actual class object for method binding.
+            let metaclassLookupType: ClassType | undefined;
+            if (
+                bindToType &&
+                isInstantiableClass(bindToType) &&
+                effectiveTargetClass &&
+                isInstantiableMetaclass(effectiveTargetClass) &&
+                !bindToType.shared.mro.some(
+                    (base) => isClass(base) && ClassType.isSameGenericClass(base, effectiveTargetClass)
+                )
+            ) {
+                const metaclass = bindToType.shared.effectiveMetaclass;
+                if (
+                    metaclass &&
+                    isInstantiableClass(metaclass) &&
+                    metaclass.shared.mro.some(
+                        (base) => isClass(base) && ClassType.isSameGenericClass(base, effectiveTargetClass)
+                    )
+                ) {
+                    metaclassLookupType = ClassType.cloneAsInstance(metaclass);
+                }
+            }
+
             const lookupResults = bindToType
-                ? lookUpClassMember(bindToType, memberName, MemberAccessFlags.Default, effectiveTargetClass)
+                ? lookUpClassMember(
+                      metaclassLookupType ?? bindToType,
+                      memberName,
+                      MemberAccessFlags.Default,
+                      effectiveTargetClass
+                  )
                 : undefined;
 
             let resultType: Type;
@@ -9891,7 +9940,11 @@ export function createTypeEvaluator(
 
             let bindToSelfType: ClassType | TypeVarType | undefined;
             if (bindToType) {
-                if (secondArgType) {
+                // Constructors use the instance form of Self for their result;
+                // binding the class object here would introduce type[type[Self]].
+                if (metaclassLookupType && memberName !== '__new__') {
+                    bindToSelfType = secondArgType && isTypeVar(secondArgType) ? secondArgType : bindToType;
+                } else if (secondArgType) {
                     // If a TypeVar was passed as the second argument, use it
                     // to derive the the self type.
                     if (isTypeVar(secondArgType)) {

@@ -7620,6 +7620,19 @@ export class Checker extends ParseTreeWalker {
         const concreteParamType = this._evaluator.makeTopLevelTypeVarsConcrete(paramType);
         const expectedType = isCls ? classType : convertToInstance(classType);
 
+        // A class-object bound can guarantee the metaclass that owns this
+        // instance method. A broader bound with a different metaclass cannot.
+        if (!isCls && isInstantiableMetaclass(classType) && isInstantiableClass(concreteParamType)) {
+            const metaclass = concreteParamType.shared.effectiveMetaclass;
+            if (
+                metaclass &&
+                isInstantiableClass(metaclass) &&
+                metaclass.shared.mro.some((base) => isClass(base) && ClassType.isSameGenericClass(base, classType))
+            ) {
+                return;
+            }
+        }
+
         // If the declared type is a protocol class or instance, skip
         // the check. This has legitimate uses for mix-in classes.
         if (isInstantiableClass(concreteParamType) && ClassType.isProtocolClass(concreteParamType)) {
