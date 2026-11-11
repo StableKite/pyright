@@ -6,7 +6,7 @@ env:
 
 on:
   push:
-    branches: ['stablekite/ctypes-errcheck-ci-v1']
+    branches: ['stablekite/native-typing-baseline-ci-v2']
 
 permissions:
   contents: read
