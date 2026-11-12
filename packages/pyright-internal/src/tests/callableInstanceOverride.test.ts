@@ -40,6 +40,13 @@ const cases: [string, number][] = [
     ['static_method_instance_field', 0],
     ['valid_keyword_only', 0],
     ['valid_positional_only_rename', 0],
+    ['valid_open_generic', 0],
+    ['bad_fixed_integer_callable', 1],
+    ['bad_fixed_integer_result', 1],
+    ['valid_open_generic_broader_parameter', 0],
+    ['valid_method_generic_alpha_rename', 0],
+    ['bad_method_generic_fixed_int', 1],
+    ['bad_method_generic_fixed_result', 1],
 ];
 
 for (const [name, errors] of cases) {

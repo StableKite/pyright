@@ -6853,12 +6853,15 @@ export class Checker extends ParseTreeWalker {
         // return when this member is inherited by a further subclass.
         const childSelf = ClassType.cloneAsInstance(selfSpecializeClass(childClassType, { useBoundTypeVars: true }));
         const selfType = TypeVarType.cloneAsBound(synthesizeTypeVarForSelfCls(childClassType, false));
-        const baseType = partiallySpecializeType(
+        let baseType = partiallySpecializeType(
             this._evaluator.getEffectiveTypeOfSymbol(baseMember.symbol),
             baseMember.classType,
             this._evaluator.getTypeClassType(),
             selfType
         );
+        if (childClassType.shared.typeVarScopeId) {
+            baseType = makeTypeVarsBound(baseType, [childClassType.shared.typeVarScopeId]);
+        }
         if (!isFunctionOrOverloaded(baseType) || this._isFinalFunction(memberName, baseMember.symbol, baseType)) {
             return false;
         }
@@ -6875,13 +6878,24 @@ export class Checker extends ParseTreeWalker {
             false,
             selfType
         );
-        const instanceType = partiallySpecializeType(
+        let instanceType = partiallySpecializeType(
             this._evaluator.getEffectiveTypeOfSymbol(overrideSymbol),
             childClassType,
             this._evaluator.getTypeClassType(),
             selfType
         );
-        return !!boundBase && this._evaluator.assignType(boundBase, instanceType);
+        if (childClassType.shared.typeVarScopeId) {
+            instanceType = makeTypeVarsBound(instanceType, [childClassType.shared.typeVarScopeId]);
+        }
+        // Method-scoped type parameters describe all supported calls too;
+        // comparing an override must not solve them to one concrete type.
+        const boundBaseForComparison =
+            boundBase &&
+            makeTypeVarsBound(
+                boundBase,
+                signatures.flatMap((signature) => getTypeVarScopeIds(signature))
+            );
+        return !!boundBaseForComparison && this._evaluator.assignType(boundBaseForComparison, instanceType);
     }
 
     private _markFunctionStatic(functionType: FunctionType): FunctionType {

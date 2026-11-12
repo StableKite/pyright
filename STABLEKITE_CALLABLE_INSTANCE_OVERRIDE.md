@@ -12,6 +12,11 @@ This preserves keyword names, parameter kinds, defaults, parameter
 contravariance, result covariance, generics, and complete overload coverage.
 `Self` is compared as the same rigid subclass type variable on both sides;
 returning a concrete child class cannot satisfy a polymorphic `Self` result.
+Class-scoped type variables are likewise rigid on both sides, so an open
+`Child[T]` cannot narrow the inherited contract to `int`. Method-scoped
+parameters likewise describe every supported call and remain rigid in the
+base signature; a callback may rename its own generic parameters while
+preserving that universal contract.
 
 The new path requires genuine method declarations in the base and instance
 variable declarations in the subclass. It retains existing errors for final
@@ -21,7 +26,7 @@ Class-body callable values can replace the inherited descriptor, and Python
 special-method lookup can bypass an instance value, so these require separate
 reasoning and receive no exemption here.
 
-The independent regression suite adds nine valid and nineteen invalid cases.
+The independent regression suite adds twelve valid and twenty-three invalid cases.
 No existing sample, expected diagnostic, snapshot, rule setting, or test
 assertion is changed. No `Any`, `Unknown`, cast, per-project exemption, or
 diagnostic suppression is introduced. Typeshed is unchanged. The intended
