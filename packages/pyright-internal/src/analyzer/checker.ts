@@ -198,6 +198,7 @@ import {
     mapSubtypes,
     partiallySpecializeType,
     selfSpecializeClass,
+    synthesizeTypeVarForSelfCls,
     transformPossibleRecursiveTypeAlias,
 } from './typeUtils';
 
@@ -6812,6 +6813,77 @@ export class Checker extends ParseTreeWalker {
         return { baseType, overrideType: boundOverrideType };
     }
 
+    // An instance-only callable attribute leaves the inherited class descriptor
+    // intact. Compare its call signature with the bound method rather than
+    // rejecting it merely because its type is a callback protocol.
+    private _isCompatibleCallableInstanceOverride(
+        baseMember: ClassMember,
+        overrideSymbol: Symbol,
+        overrideType: Type,
+        childClassType: ClassType,
+        memberName: string
+    ): boolean {
+        if (
+            !isInstantiableClass(baseMember.classType) ||
+            !isClassInstance(overrideType) ||
+            overrideSymbol.isClassVar() ||
+            !overrideSymbol.isInstanceMember() ||
+            SymbolNameUtils.isDunderName(memberName)
+        ) {
+            return false;
+        }
+
+        const baseDecls = baseMember.symbol.getDeclarations();
+        const overrideDecls = overrideSymbol.getDeclarations();
+        if (
+            baseDecls.length === 0 ||
+            !baseDecls.every((decl) => decl.type === DeclarationType.Function) ||
+            overrideDecls.length === 0 ||
+            !overrideDecls.every(
+                (decl) =>
+                    isVariableDeclaration(decl) &&
+                    !decl.isDefinedBySlots &&
+                    (decl.isDefinedByMemberAccess || !decl.inferredTypeSource)
+            )
+        ) {
+            return false;
+        }
+
+        // Keep Self polymorphic: a concrete Child return cannot satisfy a Self
+        // return when this member is inherited by a further subclass.
+        const childSelf = ClassType.cloneAsInstance(selfSpecializeClass(childClassType, { useBoundTypeVars: true }));
+        const selfType = TypeVarType.cloneAsBound(synthesizeTypeVarForSelfCls(childClassType, false));
+        const baseType = partiallySpecializeType(
+            this._evaluator.getEffectiveTypeOfSymbol(baseMember.symbol),
+            baseMember.classType,
+            this._evaluator.getTypeClassType(),
+            selfType
+        );
+        if (!isFunctionOrOverloaded(baseType) || this._isFinalFunction(memberName, baseMember.symbol, baseType)) {
+            return false;
+        }
+
+        const signatures = isFunction(baseType) ? [baseType] : OverloadedType.getOverloads(baseType);
+        if (signatures.some((signature) => FunctionType.isAbstractMethod(signature))) {
+            return false;
+        }
+
+        const boundBase = this._evaluator.bindFunctionToClassOrObject(
+            childSelf,
+            baseType,
+            baseMember.classType,
+            false,
+            selfType
+        );
+        const instanceType = partiallySpecializeType(
+            this._evaluator.getEffectiveTypeOfSymbol(overrideSymbol),
+            childClassType,
+            this._evaluator.getTypeClassType(),
+            selfType
+        );
+        return !!boundBase && this._evaluator.assignType(boundBase, instanceType);
+    }
+
     private _markFunctionStatic(functionType: FunctionType): FunctionType {
         return FunctionType.cloneWithNewFlags(functionType, functionType.shared.flags | FunctionTypeFlags.StaticMethod);
     }
@@ -6963,6 +7035,18 @@ export class Checker extends ParseTreeWalker {
                 if (diag && origDecl) {
                     diag.addRelatedInfo(LocAddendum.overriddenMethod(), origDecl.uri, origDecl.range);
                 }
+                return;
+            }
+
+            if (
+                this._isCompatibleCallableInstanceOverride(
+                    baseClassAndSymbol,
+                    overrideSymbol,
+                    overrideType,
+                    childClassType,
+                    memberName
+                )
+            ) {
                 return;
             }
 
