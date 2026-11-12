@@ -29436,6 +29436,9 @@ export function createTypeEvaluator(
     ): boolean {
         const baseParamDetails = getParamListDetails(baseMethod);
         const overrideParamDetails = getParamListDetails(overrideMethod);
+        const baseKwOnlyParams = baseParamDetails.params.filter(
+            (paramInfo) => paramInfo.kind === ParamKind.Keyword && paramInfo.param.category === ParamCategory.Simple
+        );
         const constraints = new ConstraintTracker();
 
         let canOverride = true;
@@ -29509,12 +29512,17 @@ export function createTypeEvaluator(
                         i < overrideParamDetails.positionParamCount;
                         i++
                     ) {
-                        const overrideParam = overrideParamDetails.params[i].param;
+                        const overrideParamInfo = overrideParamDetails.params[i];
+                        const overrideParam = overrideParamInfo.param;
+                        const matchesBaseKeyword =
+                            overrideParamInfo.kind === ParamKind.Standard &&
+                            baseKwOnlyParams.some((paramInfo) => paramInfo.param.name === overrideParam.name);
 
                         if (
                             overrideParam.category === ParamCategory.Simple &&
                             overrideParam.name &&
-                            !overrideParamDetails.params[i].defaultType
+                            !overrideParamInfo.defaultType &&
+                            !matchesBaseKeyword
                         ) {
                             foundParamCountMismatch = true;
                         }
@@ -29700,17 +29708,27 @@ export function createTypeEvaluator(
             }
 
             // Now check any keyword-only parameters.
-            const baseKwOnlyParams = baseParamDetails.params.filter(
-                (paramInfo) => paramInfo.kind === ParamKind.Keyword && paramInfo.param.category === ParamCategory.Simple
-            );
             const overrideKwOnlyParams = overrideParamDetails.params.filter(
                 (paramInfo) => paramInfo.kind === ParamKind.Keyword && paramInfo.param.category === ParamCategory.Simple
             );
 
             baseKwOnlyParams.forEach((paramInfo) => {
-                const overrideParamInfo = overrideKwOnlyParams.find((pi) => paramInfo.param.name === pi.param.name);
+                // A keyword-only parameter can be implemented by a standard parameter.
+                // It must remain available when every base positional parameter is supplied.
+                const overrideParamIndex = overrideParamDetails.params.findIndex(
+                    (pi) =>
+                        (pi.kind === ParamKind.Keyword || pi.kind === ParamKind.Standard) &&
+                        pi.param.category === ParamCategory.Simple &&
+                        paramInfo.param.name === pi.param.name
+                );
+                const overrideParamInfo = overrideParamDetails.params[overrideParamIndex];
+                const hasPositionalCollision =
+                    overrideParamInfo?.kind === ParamKind.Standard &&
+                    (overrideParamIndex < baseParamDetails.positionParamCount ||
+                        (baseParamDetails.argsIndex !== undefined &&
+                            !isNever(baseParamDetails.params[baseParamDetails.argsIndex].type)));
 
-                if (!overrideParamInfo && overrideParamDetails.kwargsIndex === undefined) {
+                if (hasPositionalCollision || (!overrideParamInfo && overrideParamDetails.kwargsIndex === undefined)) {
                     diag?.addMessage(
                         LocAddendum.overrideParamNameMissing().format({
                             name: paramInfo.param.name ?? '?',
