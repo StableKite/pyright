@@ -5794,6 +5794,22 @@ export function createTypeEvaluator(
             return true;
         }
 
+        // Resolving a generic alias name exposes its formal parameter before
+        // the supplied arguments are substituted. This parameter belongs to
+        // the alias, not the method declaring the member. Actual arguments
+        // still need to satisfy the enclosing class scope check.
+        const aliasInfo = type.props?.typeAliasInfo;
+        if (
+            aliasInfo?.shared.typeVarScopeId === scopeId &&
+            aliasInfo.shared.typeParams?.some(
+                (param) =>
+                    param.shared.name === type.shared.name &&
+                    (param.priv.freeTypeVar?.priv.scopeId ?? param.priv.scopeId) === scopeId
+            )
+        ) {
+            return true;
+        }
+
         const enclosingClass = ParseTreeUtils.getEnclosingClass(node);
         if (enclosingClass) {
             const liveTypeVarScopeIds = getTypeVarScopesForNode(enclosingClass);

@@ -1,0 +1,31 @@
+# Callable instance override: final method field.
+# The override must retain reportIncompatibleMethodOverride.
+from typing import Protocol, final
+
+class Writer(Protocol):
+    def __call__(self, data: bytes) -> None: ...
+
+class Parent:
+    def __init__(self) -> None:
+        self.items: list[bytes] = []
+    @final
+    def push(self, data: bytes) -> None:
+        self.items.append(data)
+
+class Child(Parent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.push: Writer = self._selected
+    def _selected(self, data: bytes) -> None:
+        self.items.append(data)
+
+def consume(parent: Parent) -> None:
+    parent.push(data=b"instance")
+
+def consume_class(cls: type[Parent], parent: Parent) -> None:
+    cls.push(parent, data=b"descriptor")
+
+child = Child()
+consume(child)
+consume_class(Child, child)
+assert child.items == [b"instance", b"descriptor"]

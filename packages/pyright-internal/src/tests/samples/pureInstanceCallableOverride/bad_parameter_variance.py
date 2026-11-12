@@ -1,0 +1,21 @@
+# Callable instance override: bad parameter variance.
+# The override must retain reportIncompatibleMethodOverride.
+from typing import Protocol
+
+class Writer(Protocol):
+    def __call__(self, data: bytes) -> str: ...
+class Parent:
+    def push(self, data: object) -> object:
+        return data
+class Child(Parent):
+    def __init__(self) -> None:
+        self.push: Writer = self._selected
+    def _selected(self, data: bytes) -> str:
+        return data.decode()
+def consume(parent: Parent) -> object:
+    return parent.push(data=object())
+def consume_class(cls: type[Parent], parent: Parent) -> object:
+    return cls.push(parent, data=b"descriptor")
+child = Child()
+assert isinstance(consume(child), str)
+assert consume_class(Child, child) == b"descriptor"
