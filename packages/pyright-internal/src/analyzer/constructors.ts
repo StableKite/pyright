@@ -446,6 +446,16 @@ function validateNewMethod(
     if (callResult.argumentErrors) {
         argumentErrors = true;
 
+        // An argument error does not make an explicitly unrelated result an
+        // allocation of this class. Retain it rather than diagnosing an
+        // inapplicable __init__ or abstract allocation as a cascade.
+        if (isFunction(newMethodTypeResult.type) && newMethodTypeResult.type.shared.declaredReturnType) {
+            const declaredReturn = FunctionType.getEffectiveReturnType(newMethodTypeResult.type);
+            if (declaredReturn && shouldSkipInitEvaluation(evaluator, type, declaredReturn)) {
+                newReturnType = declaredReturn;
+            }
+        }
+
         // Evaluate the arguments in a non-speculative manner to generate any diagnostics.
         evaluator.validateCallArgs(
             errorNode,
@@ -1075,7 +1085,14 @@ function shouldSkipNewAndInitEvaluation(
 // If __new__ returns a type that is not an instance of the class, skip the
 // __init__ method evaluation. This is consistent with the behavior of the
 // type.__call__ runtime behavior.
-function shouldSkipInitEvaluation(evaluator: TypeEvaluator, classType: ClassType, newMethodReturnType: Type): boolean {
+export function shouldSkipInitEvaluation(
+    evaluator: TypeEvaluator,
+    classType: ClassType,
+    newMethodReturnType: Type
+): boolean {
+    if (isNever(newMethodReturnType)) {
+        return true;
+    }
     const returnType = evaluator.makeTopLevelTypeVarsConcrete(newMethodReturnType);
 
     let skipInitCheck = false;

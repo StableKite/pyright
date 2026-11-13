@@ -11826,8 +11826,32 @@ export function createTypeEvaluator(
             };
         }
 
-        if (ClassType.supportsAbstractMethods(expandedCallType)) {
-            const abstractSymbols = getAbstractSymbols(expandedCallType);
+        // The evaluated constructor result determines whether this call can
+        // allocate the abstract class. A custom __new__ or metaclass __call__
+        // may return an unrelated object or a concrete subclass instead.
+        const constructorResult = validateConstructorArgs(
+            evaluatorInterface,
+            errorNode,
+            argList,
+            expandedCallType,
+            skipUnknownArgCheck,
+            inferenceContext
+        );
+
+        const abstractResultType = constructorResult.returnType
+            ? findSubtype(makeTopLevelTypeVarsConcrete(constructorResult.returnType), (subtype) => {
+                  if (!isClassInstance(subtype) || !ClassType.supportsAbstractMethods(subtype)) {
+                      return false;
+                  }
+                  return (
+                      ClassType.isDerivedFrom(ClassType.cloneAsInstantiable(subtype), expandedCallType) &&
+                      getAbstractSymbols(subtype).length > 0
+                  );
+              })
+            : undefined;
+
+        if (abstractResultType && isClassInstance(abstractResultType)) {
+            const abstractSymbols = getAbstractSymbols(abstractResultType);
 
             if (
                 abstractSymbols.length > 0 &&
@@ -11861,7 +11885,7 @@ export function createTypeEvaluator(
                 addDiagnostic(
                     DiagnosticRule.reportAbstractUsage,
                     LocMessage.instantiateAbstract().format({
-                        type: expandedCallType.shared.name,
+                        type: abstractResultType.shared.name,
                     }) + diagAddendum.getString(),
                     errorNode
                 );
@@ -11878,16 +11902,6 @@ export function createTypeEvaluator(
                 errorNode
             );
         }
-
-        // Assume this is a call to the constructor.
-        const constructorResult = validateConstructorArgs(
-            evaluatorInterface,
-            errorNode,
-            argList,
-            expandedCallType,
-            skipUnknownArgCheck,
-            inferenceContext
-        );
 
         const overloadsUsedForCall = constructorResult.overloadsUsedForCall;
         const argumentErrors = constructorResult.argumentErrors;

@@ -92,7 +92,7 @@ import { OperatorType, StringTokenFlags, TokenType } from '../parser/tokenizerTy
 import { AnalyzerFileInfo } from './analyzerFileInfo';
 import * as AnalyzerNodeInfo from './analyzerNodeInfo';
 import { ConstraintTracker } from './constraintTracker';
-import { getBoundCallMethod, getBoundInitMethod, getBoundNewMethod } from './constructors';
+import { getBoundCallMethod, getBoundInitMethod, getBoundNewMethod, shouldSkipInitEvaluation } from './constructors';
 import { addInheritedDataClassEntries } from './dataClasses';
 import { Declaration, DeclarationType, isAliasDeclaration, isVariableDeclaration } from './declaration';
 import { getNameNodeForDeclaration } from './declarationUtils';
@@ -5583,11 +5583,9 @@ export class Checker extends ParseTreeWalker {
         });
     }
 
-    // Validates that the __init__ and __new__ method signatures are consistent.
+    // Compare only constructor stages that can participate in the same call.
     private _validateConstructorConsistency(classType: ClassType, errorNode: ExpressionNode) {
-        // If the class has a custom metaclass with a __call__ method, skip this check.
-        const callMethodResult = getBoundCallMethod(this._evaluator, errorNode, classType);
-        if (callMethodResult) {
+        if (getBoundCallMethod(this._evaluator, errorNode, classType)) {
             return;
         }
 
@@ -5596,58 +5594,102 @@ export class Checker extends ParseTreeWalker {
             !newMethodResult ||
             newMethodResult.typeErrors ||
             !newMethodResult.classType ||
-            !isClass(newMethodResult.classType)
+            !isClass(newMethodResult.classType) ||
+            !isFunctionOrOverloaded(newMethodResult.type)
         ) {
             return;
         }
 
-        const initMethodResult = getBoundInitMethod(this._evaluator, errorNode, ClassType.cloneAsInstance(classType));
-        if (
-            !initMethodResult ||
-            initMethodResult.typeErrors ||
-            !initMethodResult.classType ||
-            !isClass(initMethodResult.classType)
-        ) {
-            return;
-        }
+        const skipsInit = (signature: FunctionType) => {
+            const returnType = FunctionType.getEffectiveReturnType(signature);
+            return (
+                !!signature.shared.declaredReturnType &&
+                !!returnType &&
+                shouldSkipInitEvaluation(this._evaluator, classType, returnType)
+            );
+        };
 
-        // If both the __new__ and __init__ come from subclasses, don't bother
-        // checking for this class.
-        if (
-            !ClassType.isSameGenericClass(initMethodResult.classType, classType) &&
-            !ClassType.isSameGenericClass(newMethodResult.classType, classType)
-        ) {
-            return;
-        }
-
-        let newMemberType: Type | undefined = newMethodResult.type;
-        if (!isFunctionOrOverloaded(newMemberType)) {
-            return;
-        }
-
-        if (isOverloaded(newMemberType)) {
-            // Find the implementation, not the overloaded signatures.
-            newMemberType = OverloadedType.getImplementation(newMemberType);
-
-            if (!newMemberType || !isFunction(newMemberType)) {
+        let newMembers: FunctionType[];
+        if (isOverloaded(newMethodResult.type)) {
+            const implementation = OverloadedType.getImplementation(newMethodResult.type);
+            if (!implementation || !isFunction(implementation)) {
+                // Preserve the existing policy for overloaded declarations
+                // without an implementation (including built-in type.__new__).
                 return;
             }
+            const signatures = OverloadedType.getOverloads(newMethodResult.type);
+            if (signatures.some(skipsInit)) {
+                // A mixed implementation union does not describe which
+                // overload invokes __init__. Keep checking the Self branches.
+                newMembers = signatures.filter((signature) => !skipsInit(signature));
+            } else {
+                newMembers = [implementation];
+            }
+        } else {
+            newMembers = [newMethodResult.type];
         }
 
-        let initMemberType: Type | undefined = initMethodResult.type;
-        if (!isFunctionOrOverloaded(initMemberType)) {
-            return;
-        }
+        for (const newMemberType of newMembers) {
+            if (skipsInit(newMemberType)) {
+                continue;
+            }
 
-        if (isOverloaded(initMemberType)) {
-            // Find the implementation, not the overloaded signatures.
-            initMemberType = OverloadedType.getImplementation(initMemberType);
+            let initTargets = [ClassType.cloneAsInstance(classType)];
+            const newReturnType = FunctionType.getEffectiveReturnType(newMemberType);
+            if (newMemberType.shared.declaredReturnType && newReturnType) {
+                const returnedInstances: ClassType[] = [];
+                doForEachSubtype(this._evaluator.makeTopLevelTypeVarsConcrete(newReturnType), (subtype) => {
+                    if (isClassInstance(subtype)) {
+                        returnedInstances.push(subtype);
+                    }
+                });
+                if (returnedInstances.length > 0) {
+                    initTargets = returnedInstances;
+                }
+            }
 
-            if (!initMemberType || !isFunction(initMemberType)) {
-                return;
+            for (const initTarget of initTargets) {
+                const initMethodResult = getBoundInitMethod(this._evaluator, errorNode, initTarget);
+                if (
+                    !initMethodResult ||
+                    initMethodResult.typeErrors ||
+                    !initMethodResult.classType ||
+                    !isClass(initMethodResult.classType) ||
+                    !isFunctionOrOverloaded(initMethodResult.type)
+                ) {
+                    continue;
+                }
+                if (
+                    !ClassType.isSameGenericClass(initMethodResult.classType, classType) &&
+                    !ClassType.isSameGenericClass(newMethodResult.classType, classType)
+                ) {
+                    continue;
+                }
+
+                const initMemberType = isOverloaded(initMethodResult.type)
+                    ? OverloadedType.getImplementation(initMethodResult.type)
+                    : initMethodResult.type;
+                if (!initMemberType || !isFunction(initMemberType)) {
+                    continue;
+                }
+                this._validateConstructorSignaturePair(
+                    classType,
+                    newMemberType,
+                    newMethodResult.classType,
+                    initMemberType,
+                    initMethodResult.classType
+                );
             }
         }
+    }
 
+    private _validateConstructorSignaturePair(
+        classType: ClassType,
+        newMemberType: FunctionType,
+        newClassType: ClassType,
+        initMemberType: FunctionType,
+        initClassType: ClassType
+    ) {
         // If either of the functions has a default parameter signature
         // (* args: Any, ** kwargs: Any), don't proceed with the check.
         if (FunctionType.hasDefaultParams(initMemberType) || FunctionType.hasDefaultParams(newMemberType)) {
@@ -5670,7 +5712,7 @@ export class Checker extends ParseTreeWalker {
                 AssignTypeFlags.SkipReturnTypeCheck
             )
         ) {
-            const displayOnInit = ClassType.isSameGenericClass(initMethodResult.classType, classType);
+            const displayOnInit = ClassType.isSameGenericClass(initClassType, classType);
             const initDecl = initMemberType.shared.declaration;
             const newDecl = newMemberType.shared.declaration;
 
@@ -5698,9 +5740,7 @@ export class Checker extends ParseTreeWalker {
                     DiagnosticRule.reportInconsistentConstructor,
                     LocMessage.constructorParametersMismatch().format({
                         classType: this._evaluator.printType(
-                            ClassType.cloneAsInstance(
-                                displayOnInit ? initMethodResult.classType : newMethodResult.classType
-                            )
+                            ClassType.cloneAsInstance(displayOnInit ? initClassType : newClassType)
                         ),
                     }) + diagAddendum.getString(),
                     mainDeclNode
@@ -5712,9 +5752,7 @@ export class Checker extends ParseTreeWalker {
                     diagnostic.addRelatedInfo(
                         (displayOnInit ? LocAddendum.newMethodLocation() : LocAddendum.initMethodLocation()).format({
                             type: this._evaluator.printType(
-                                ClassType.cloneAsInstance(
-                                    displayOnInit ? newMethodResult.classType : initMethodResult.classType
-                                )
+                                ClassType.cloneAsInstance(displayOnInit ? newClassType : initClassType)
                             ),
                         }),
                         secondaryDecl.uri,
