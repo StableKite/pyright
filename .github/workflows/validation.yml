@@ -1,29 +1,31 @@
-name: 'Validation'
+name: 'StableKite descriptors - original Pyright checks v7'
 
 env:
   NODE_VERSION: '24.15.0' # Shipped with VS Code.
   PYTHON_VERSION: 3.11
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   typecheck:
-    if: github.repository == 'microsoft/pyright'
+    if: github.repository == 'microsoft/pyright' || github.repository == 'StableKite/pyright'
     runs-on: ubuntu-latest
     name: Typecheck
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+      - name: Verify immutable reviewed source
+        shell: bash
+        run: |
+          actual=$(git rev-parse HEAD)
+          echo "reviewed_source=$actual"
+          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -33,17 +35,25 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'pnpm-lock.yaml'
 
-      - uses: ./.github/actions/choose-npm-install
+      - uses: ./.github/actions/standard-npm-install
 
       - run: pnpm exec lerna exec --stream --no-bail -- "tsc --noEmit"
 
   style:
-    if: github.repository == 'microsoft/pyright'
+    if: github.repository == 'microsoft/pyright' || github.repository == 'StableKite/pyright'
     runs-on: ubuntu-latest
     name: Style
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+      - name: Verify immutable reviewed source
+        shell: bash
+        run: |
+          actual=$(git rev-parse HEAD)
+          echo "reviewed_source=$actual"
+          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -53,7 +63,7 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'pnpm-lock.yaml'
 
-      - uses: ./.github/actions/choose-npm-install
+      - uses: ./.github/actions/standard-npm-install
 
       - name: Check diff after pnpm install
         run: git diff --exit-code --name-only
@@ -72,6 +82,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+      - name: Verify immutable reviewed source
+        shell: bash
+        run: |
+          actual=$(git rev-parse HEAD)
+          echo "reviewed_source=$actual"
+          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -81,7 +99,7 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'pnpm-lock.yaml'
 
-      - uses: ./.github/actions/choose-npm-install
+      - uses: ./.github/actions/standard-npm-install
 
       - name: pnpm test (pyright-internal)
         run: pnpm test
@@ -134,11 +152,18 @@ jobs:
     name: Build
     needs: typecheck
     permissions:
-      id-token: write
       contents: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+      - name: Verify immutable reviewed source
+        shell: bash
+        run: |
+          actual=$(git rev-parse HEAD)
+          echo "reviewed_source=$actual"
+          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -148,7 +173,7 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'pnpm-lock.yaml'
 
-      - uses: ./.github/actions/choose-npm-install
+      - uses: ./.github/actions/standard-npm-install
 
       - run: npm pack --dry-run
         working-directory: packages/pyright
