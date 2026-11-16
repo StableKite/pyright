@@ -3009,7 +3009,8 @@ export function createTypeEvaluator(
         memberAccessClass: Type | undefined,
         useDescriptorSetterType: boolean,
         bindFunction: boolean,
-        selfType: ClassType | TypeVarType | undefined
+        selfType: ClassType | TypeVarType | undefined,
+        errorNode: ExpressionNode
     ): Type | undefined {
         let declaredType = getDeclaredTypeOfSymbol(symbol)?.type;
         if (!declaredType) {
@@ -3031,6 +3032,21 @@ export function createTypeEvaluator(
         if (classOrObjectBase) {
             if (memberAccessClass && isInstantiableClass(memberAccessClass)) {
                 declaredType = partiallySpecializeType(declaredType, memberAccessClass, getTypeClassType(), selfType);
+            }
+
+            if (useDescriptorSetterType && isClassInstance(declaredType)) {
+                const readResult = getNonDataDescriptorReadType(
+                    declaredType,
+                    declaredType,
+                    classOrObjectBase,
+                    selfType,
+                    MemberAccessFlags.Default,
+                    errorNode,
+                    /* memberName */ ''
+                );
+                if (readResult && !readResult.typeErrors) {
+                    return readResult.type;
+                }
             }
 
             if (isFunctionOrOverloaded(declaredType)) {
@@ -3145,7 +3161,8 @@ export function createTypeEvaluator(
                             classOrObjectBase = baseSubtype;
                             memberAccessClass = classMemberInfo?.classType;
                             symbol = classMemberInfo?.symbol;
-                            useDescriptorSetterType = true;
+                            useDescriptorSetterType =
+                                !!classMemberInfo?.isClassMember && !classMemberInfo.isSlotsMember;
 
                             // If this is an instance member (e.g. a dataclass field), don't
                             // bind it to the object if it's a function.
@@ -3184,7 +3201,8 @@ export function createTypeEvaluator(
                                       memberAccessClass,
                                       useDescriptorSetterType,
                                       bindFunction,
-                                      selfType
+                                      selfType,
+                                      expression
                                   )
                                 : undefined;
 
@@ -3321,7 +3339,8 @@ export function createTypeEvaluator(
                 memberAccessClass,
                 useDescriptorSetterType,
                 bindFunction,
-                selfType
+                selfType,
+                expression
             );
         }
 
@@ -6941,6 +6960,44 @@ export function createTypeEvaluator(
         };
     }
 
+    // An instance assignment shadows a non-data descriptor. The replacement must
+    // preserve the specialized type produced by the instance's __get__, because
+    // subsequent reads return the replacement without invoking __get__ again.
+    function getNonDataDescriptorReadType(
+        memberType: Type,
+        concreteMemberType: ClassType,
+        classType: ClassType,
+        selfType: ClassType | TypeVarType | undefined,
+        flags: MemberAccessFlags,
+        errorNode: ExpressionNode,
+        memberName: string,
+        diag?: DiagnosticAddendum
+    ): MemberAccessTypeResult | undefined {
+        if (
+            !isClassInstance(classType) ||
+            !isClassInstance(concreteMemberType) ||
+            ClassType.isPropertyClass(concreteMemberType) ||
+            !lookUpClassMember(concreteMemberType, '__get__', MemberAccessFlags.SkipInstanceMembers) ||
+            lookUpClassMember(concreteMemberType, '__set__', MemberAccessFlags.SkipInstanceMembers) ||
+            lookUpClassMember(concreteMemberType, '__delete__', MemberAccessFlags.SkipInstanceMembers)
+        ) {
+            return undefined;
+        }
+
+        return applyDescriptorAccessMethod(
+            memberType,
+            concreteMemberType,
+            /* memberInfo */ undefined,
+            classType,
+            selfType,
+            flags,
+            errorNode,
+            memberName,
+            { method: 'get' },
+            diag
+        );
+    }
+
     // Applies descriptor access methods "__get__", "__set__", or "__delete__"
     // if they apply.
     function applyDescriptorAccessMethod(
@@ -6978,6 +7035,30 @@ export function createTypeEvaluator(
         );
 
         if (!methodTypeResult || methodTypeResult.typeErrors) {
+            if (!methodTypeResult && usage.method === 'set') {
+                const readResult = getNonDataDescriptorReadType(
+                    memberType,
+                    concreteMemberType,
+                    classType,
+                    selfType,
+                    flags,
+                    errorNode,
+                    memberName,
+                    diag
+                );
+                if (readResult) {
+                    const slotsNames = ClassType.getInheritedSlotsNames(classType);
+                    if (slotsNames && !slotsNames.includes('__dict__')) {
+                        diag?.addMessage(LocMessage.slotsAttributeError().format({ name: memberName }));
+                        return { ...readResult, typeErrors: true, isDescriptorApplied: false };
+                    }
+
+                    // This is an ordinary instance write, so ClassVar and Final
+                    // checks still apply even though __get__ supplies its type.
+                    return { ...readResult, isDescriptorApplied: false };
+                }
+            }
+
             // Provide special error messages for properties.
             if (ClassType.isPropertyClass(concreteMemberType) && usage.method !== 'get') {
                 const message =

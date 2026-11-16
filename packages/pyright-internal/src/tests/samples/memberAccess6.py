@@ -39,10 +39,9 @@ ChildA().attr2
 
 foo = ChildA()
 
-# This should generate an error because bar is declared as containing a
-# Column[str], which doesn't provide a __set__ method.
+# An instance write shadows this non-data descriptor with a value that
+# preserves its specialized instance-read type, str.
 foo.attr1 = ""
 
-# This should generate an error because baz's inferred type is
-# Column[str], which doesn't provide a __set__ method.
+# The inferred descriptor type follows the same instance-write rule.
 foo.attr2 = ""
