@@ -1,4 +1,4 @@
-name: 'StableKite descriptors - original Pyright checks v7'
+name: 'StableKite instance callable contracts - original Pyright checks v8'
 
 env:
   NODE_VERSION: '24.15.0' # Shipped with VS Code.
@@ -19,13 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+          ref: 8beb6cc5d33a4128761d7c461387d7a7a761fe2a
       - name: Verify immutable reviewed source
         shell: bash
         run: |
           actual=$(git rev-parse HEAD)
           echo "reviewed_source=$actual"
-          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
+          test "$actual" = "8beb6cc5d33a4128761d7c461387d7a7a761fe2a"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -47,13 +47,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+          ref: 8beb6cc5d33a4128761d7c461387d7a7a761fe2a
       - name: Verify immutable reviewed source
         shell: bash
         run: |
           actual=$(git rev-parse HEAD)
           echo "reviewed_source=$actual"
-          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
+          test "$actual" = "8beb6cc5d33a4128761d7c461387d7a7a761fe2a"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -83,13 +83,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+          ref: 8beb6cc5d33a4128761d7c461387d7a7a761fe2a
       - name: Verify immutable reviewed source
         shell: bash
         run: |
           actual=$(git rev-parse HEAD)
           echo "reviewed_source=$actual"
-          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
+          test "$actual" = "8beb6cc5d33a4128761d7c461387d7a7a761fe2a"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
@@ -157,13 +157,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: 7cf26624313966738e0496741b6c7b4bb5332b43
+          ref: 8beb6cc5d33a4128761d7c461387d7a7a761fe2a
       - name: Verify immutable reviewed source
         shell: bash
         run: |
           actual=$(git rev-parse HEAD)
           echo "reviewed_source=$actual"
-          test "$actual" = "7cf26624313966738e0496741b6c7b4bb5332b43"
+          test "$actual" = "8beb6cc5d33a4128761d7c461387d7a7a761fe2a"
 
       - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
 
