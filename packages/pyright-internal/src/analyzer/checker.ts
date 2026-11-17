@@ -3597,6 +3597,12 @@ export class Checker extends ParseTreeWalker {
         };
 
         for (const otherDecl of otherDecls) {
+            if (
+                this._evaluator.isInstanceMethodShadowDeclaration(primaryDecl, otherDecl) ||
+                this._evaluator.isInstanceMethodShadowDeclaration(otherDecl, primaryDecl)
+            ) {
+                continue;
+            }
             if (otherDecl.type === DeclarationType.Class) {
                 let duplicateIsOk = false;
 
@@ -6930,6 +6936,101 @@ export class Checker extends ParseTreeWalker {
                 if (diag && origDecl) {
                     diag.addRelatedInfo(LocAddendum.finalMethod(), origDecl.uri, origDecl.range);
                 }
+            }
+        }
+
+        const baseInstanceDecl = baseClassAndSymbol.symbol
+            .getTypedDeclarations()
+            .find((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember);
+        const ownInstanceDecl = overrideSymbol
+            .getTypedDeclarations()
+            .find((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember);
+        if (baseInstanceDecl || ownInstanceDecl) {
+            const classMember = lookUpClassMember(childClassType, memberName, MemberAccessFlags.SkipInstanceMembers);
+            const classMemberType = classMember && this._evaluator.getTypeOfMember(classMember);
+            if (
+                classMember &&
+                classMemberType &&
+                isFunctionOrOverloaded(classMemberType) &&
+                classMember.symbol
+                    .getTypedDeclarations()
+                    .some((decl) => decl.type === DeclarationType.Function && decl.isMethod)
+            ) {
+                const specializedMethod = partiallySpecializeType(
+                    classMemberType,
+                    childClassType,
+                    this._evaluator.getTypeClassType(),
+                    childClassSelf
+                );
+                const boundMethod = isFunctionOrOverloaded(specializedMethod)
+                    ? this._evaluator.bindFunctionToClassOrObject(childClassSelf, specializedMethod)
+                    : undefined;
+                const specializeContract = (symbol: Symbol, owner: ClassType, self: ClassType) => {
+                    const contract = this._evaluator.getDeclaredTypeOfSymbol(symbol, undefined, true).type;
+                    return (
+                        contract && partiallySpecializeType(contract, owner, this._evaluator.getTypeClassType(), self)
+                    );
+                };
+                const baseContract =
+                    baseInstanceDecl && specializeContract(baseClassAndSymbol.symbol, baseClass, baseClassSelf);
+                const ownContract =
+                    ownInstanceDecl && specializeContract(overrideSymbol, childClassType, childClassSelf);
+                const slots = ClassType.getInheritedSlotsNames(childClassType);
+                let compatible = !!boundMethod && !(slots && !slots.includes('__dict__'));
+                if (
+                    isFunction(classMemberType) &&
+                    (FunctionType.isFinal(classMemberType) ||
+                        FunctionType.isClassMethod(classMemberType) ||
+                        FunctionType.isStaticMethod(classMemberType))
+                ) {
+                    compatible = false;
+                }
+                if (boundMethod) {
+                    if (
+                        baseContract &&
+                        !this._evaluator.isWritableMethodContractCompatible(baseContract, boundMethod)
+                    ) {
+                        compatible = false;
+                    }
+                    if (ownContract && !this._evaluator.isWritableMethodContractCompatible(ownContract, boundMethod)) {
+                        compatible = false;
+                    }
+                }
+                if (
+                    baseContract &&
+                    ownContract &&
+                    (!this._evaluator.assignType(baseContract, ownContract) ||
+                        !this._evaluator.assignType(ownContract, baseContract))
+                ) {
+                    compatible = false;
+                }
+                if (!compatible) {
+                    const decl = getLastTypedDeclarationForSymbol(overrideSymbol);
+                    if (decl) {
+                        this._evaluator.addDiagnostic(
+                            DiagnosticRule.reportIncompatibleVariableOverride,
+                            LocMessage.symbolOverridden().format({
+                                name: memberName,
+                                className: baseClass.shared.name,
+                            }) +
+                                '\n' +
+                                LocAddendum.overrideIsInvariant(),
+                            getNameNodeForDeclaration(decl) ?? decl.node
+                        );
+                    }
+                }
+                if (
+                    !overrideSymbol
+                        .getTypedDeclarations()
+                        .some((decl) => decl.type === DeclarationType.Function && decl.isMethod)
+                ) {
+                    return;
+                }
+                const baseClassMember = lookUpClassMember(baseClass, memberName, MemberAccessFlags.SkipInstanceMembers);
+                if (baseClassMember) {
+                    baseType = this._evaluator.getTypeOfMember(baseClassMember);
+                }
+                overrideType = specializedMethod;
             }
         }
 

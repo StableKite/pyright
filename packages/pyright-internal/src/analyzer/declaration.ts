@@ -178,6 +178,9 @@ export interface VariableDeclaration extends DeclarationBase {
     // within the class?
     isDefinedByMemberAccess?: boolean;
 
+    // Does this member-access declaration belong to the instance dictionary?
+    isInstanceMember?: boolean;
+
     // If an "attribute docstring" (as defined in PEP 258) is present...
     docString?: string | undefined;
 

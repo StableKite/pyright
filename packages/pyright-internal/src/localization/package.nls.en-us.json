@@ -1278,6 +1278,10 @@
             "message": "Second argument to \"super\" call must be object or class that derives from \"{type}\"",
             "comment": "{Locked='super'}"
         },
+        "superCallZeroArgFormNoPositionalParam": {
+            "message": "Zero-argument super call requires a positional parameter",
+            "comment": "Error message for a zero-argument super call in a function with no positional parameters"
+        },
         "superCallZeroArgForm": {
             "message": "Zero-argument form of \"super\" call is valid only within a method",
             "comment": "{Locked='super'}"

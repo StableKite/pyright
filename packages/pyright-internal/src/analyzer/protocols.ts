@@ -517,7 +517,12 @@ function assignToProtocolInternal(
                 }
 
                 if (isInstantiableClass(srcMemberInfo.classType)) {
-                    const symbolType = evaluator.getEffectiveTypeOfSymbol(srcMemberInfo.symbol);
+                    const symbolType = evaluator.getEffectiveTypeOfSymbolForUsage(
+                        srcMemberInfo.symbol,
+                        undefined,
+                        false,
+                        srcMemberInfo.isInstanceMember
+                    ).type;
 
                     // If this is a function, infer its return type prior to specializing it.
                     if (isFunction(symbolType)) {
@@ -537,7 +542,11 @@ function assignToProtocolInternal(
                 // If the source is a method, bind it.
                 if (isFunctionOrOverloaded(srcMemberType)) {
                     if (isMemberFromMetaclass || isInstantiableClass(srcMemberInfo.classType)) {
-                        let isInstanceMember = !srcMemberInfo.symbol.isClassMember();
+                        let isInstanceMember =
+                            !srcMemberInfo.symbol.isClassMember() ||
+                            srcMemberInfo.symbol
+                                .getTypedDeclarations()
+                                .some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember);
 
                         // Special-case dataclasses whose entries act like instance members.
                         if (ClassType.isDataClass(srcType)) {

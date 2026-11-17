@@ -172,6 +172,9 @@ interface CachedTypeInfo {
 }
 
 export interface TypeBaseProps {
+    // A generic class-object receiver must belong to this metaclass as well as
+    // represent the annotated instance type.
+    metaclassConstraint?: ClassType;
     // Used to handle nested references to instantiable classes
     // (e.g. type[type[type[T]]]). If the field isn't present,
     // it is assumed to be zero
@@ -214,6 +217,10 @@ export interface TypeBase<T extends TypeCategory> {
 }
 
 export namespace TypeBase {
+    export function getMetaclassConstraint(type: Type): ClassType | undefined {
+        return isInstantiable(type) && getInstantiableDepth(type) === 0 ? type.props?.metaclassConstraint : undefined;
+    }
+
     export function isInstantiable(type: TypeBase<any>) {
         return (type.flags & TypeFlags.Instantiable) !== 0;
     }
@@ -281,6 +288,23 @@ export namespace TypeBase {
         return clone;
     }
 
+    export function cloneWithoutMetaclassConstraint<T extends Type>(type: T): T {
+        if (
+            !type.props?.metaclassConstraint &&
+            !(isTypeVar(type) && type.priv.freeTypeVar?.props?.metaclassConstraint)
+        ) {
+            return type;
+        }
+        const clone = TypeBase.cloneType(type);
+        if (clone.props) {
+            delete clone.props.metaclassConstraint;
+        }
+        if (isTypeVar(clone) && clone.priv.freeTypeVar) {
+            clone.priv.freeTypeVar = cloneWithoutMetaclassConstraint(clone.priv.freeTypeVar);
+        }
+        return clone;
+    }
+
     export function cloneTypeAsInstance<T extends Type>(type: T, cache: boolean): T {
         assert(TypeBase.isInstantiable(type));
 
@@ -299,6 +323,11 @@ export namespace TypeBase {
             TypeBase.setInstantiableDepth(newInstance, undefined);
         } else {
             TypeBase.setInstantiableDepth(newInstance, depth - 1);
+        }
+
+        // The qualifier constrains a class object, not its instance type.
+        if (TypeBase.isInstance(newInstance) && newInstance.props?.metaclassConstraint) {
+            delete newInstance.props.metaclassConstraint;
         }
 
         // Should we cache it for next time?
@@ -778,6 +807,8 @@ export interface PropertyMethodInfo {
 }
 
 export interface ClassDetailsPriv {
+    // A super() proxy uses the class MRO without reading instance replacements.
+    isSuperProxy?: boolean;
     // A generic class that has been completely or partially
     // specialized will have type arguments that correspond to
     // some or all of the type parameters.
@@ -3428,6 +3459,18 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
     recursionCount++;
 
     const recursiveOptions = options.ignoreTypeFlags ? { ...options, ignoreTypeFlags: false } : options;
+
+    const metaConstraint1 = TypeBase.getMetaclassConstraint(type1);
+    const metaConstraint2 = TypeBase.getMetaclassConstraint(type2);
+    if (metaConstraint1 || metaConstraint2) {
+        if (
+            !metaConstraint1 ||
+            !metaConstraint2 ||
+            !isTypeSame(metaConstraint1, metaConstraint2, recursiveOptions, recursionCount)
+        ) {
+            return false;
+        }
+    }
 
     if (options.honorTypeForm) {
         const typeForm1 = type1.props?.typeForm;

@@ -238,6 +238,7 @@ export interface TypeResult<T extends Type = Type> {
     // "super" call can specify a different class or object to
     // bind.
     bindToSelfType?: ClassType | TypeVarType | undefined;
+    isSuperMemberAccess?: boolean;
 
     unpackedType?: Type | undefined;
     typeList?: TypeResultWithNode[] | undefined;
@@ -751,12 +752,17 @@ export interface TypeEvaluator {
     ) => Type;
     isTypeSubsumedByOtherType: (type: Type, otherType: Type, allowAnyToSubsume: boolean) => boolean;
     lookUpSymbolRecursive: (node: ParseNode, name: string, honorCodeFlow: boolean) => SymbolWithScope | undefined;
-    getDeclaredTypeOfSymbol: (symbol: Symbol) => DeclaredSymbolTypeInfo;
+    getDeclaredTypeOfSymbol: (
+        symbol: Symbol,
+        usageNode?: NameNode,
+        isInstanceMember?: boolean
+    ) => DeclaredSymbolTypeInfo;
     getEffectiveTypeOfSymbol: (symbol: Symbol) => Type;
     getEffectiveTypeOfSymbolForUsage: (
         symbol: Symbol,
         usageNode?: NameNode,
-        useLastDecl?: boolean
+        useLastDecl?: boolean,
+        isInstanceMember?: boolean
     ) => EffectiveTypeResult;
     getInferredTypeOfDeclaration: (symbol: Symbol, decl: Declaration) => Type | undefined;
     getDeclaredTypeForExpression: (expression: ExpressionNode, usage?: EvaluatorUsage) => Type | undefined;
@@ -769,6 +775,8 @@ export interface TypeEvaluator {
     ) => FunctionType | undefined;
     getBuiltInType: (node: ParseNode, name: string) => Type;
     getTypeOfMember: (member: ClassMember) => Type;
+    isInstanceMethodShadowDeclaration: (instanceDecl: Declaration, methodDecl: Declaration) => boolean;
+    isWritableMethodContractCompatible: (contract: Type, method: FunctionType | OverloadedType) => boolean;
     getTypeOfBoundMember(
         errorNode: ExpressionNode,
         objectType: ClassType,

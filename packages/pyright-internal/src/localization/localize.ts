@@ -949,6 +949,8 @@ export namespace Localizer {
         export const superCallSecondArg = () =>
             new ParameterizedString<{ type: string }>(getRawString('Diagnostic.superCallSecondArg'));
         export const superCallZeroArgForm = () => getRawString('Diagnostic.superCallZeroArgForm');
+        export const superCallZeroArgFormNoPositionalParam = () =>
+            getRawString('Diagnostic.superCallZeroArgFormNoPositionalParam');
         export const superCallZeroArgFormStaticMethod = () =>
             getRawString('Diagnostic.superCallZeroArgFormStaticMethod');
         export const symbolIsUnbound = () =>

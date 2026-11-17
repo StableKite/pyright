@@ -1761,6 +1761,16 @@ export function lookUpObjectMember(
 
 // Looks up a member in a class using the multiple-inheritance rules
 // defined by Python.
+export function getEffectiveMetaclass(classType: ClassType): ClassType | AnyType | UnknownType | undefined {
+    const actual = classType.shared.effectiveMetaclass;
+    const constraint = TypeBase.getMetaclassConstraint(classType);
+    if (!constraint) {
+        return actual;
+    }
+    const required = ClassType.cloneAsInstantiable(constraint);
+    return actual && isInstantiableClass(actual) && ClassType.isDerivedFrom(actual, required) ? actual : required;
+}
+
 export function lookUpClassMember(
     classType: ClassType,
     memberName: string,
@@ -1768,7 +1778,7 @@ export function lookUpClassMember(
     skipMroClass?: ClassType | undefined
 ): ClassMember | undefined {
     // Look in the metaclass first.
-    const metaclass = classType.shared.effectiveMetaclass;
+    const metaclass = getEffectiveMetaclass(classType);
 
     // Skip the "type" class as an optimization because it is known to not
     // define any instance variables, and it's by far the most common metaclass.
@@ -1897,6 +1907,20 @@ export function* getClassMemberIterator(
                     if (!declaredTypesOnly || hasDeclaredType) {
                         let isInstanceMember = symbol.isInstanceMember();
                         let isClassMember = true;
+
+                        // An annotated instance replacement does not replace the
+                        // function stored on the class itself.
+                        if (
+                            (flags & MemberAccessFlags.SkipInstanceMembers) !== 0 &&
+                            symbol
+                                .getTypedDeclarations()
+                                .some((decl) => decl.type === DeclarationType.Function && decl.isMethod) &&
+                            symbol
+                                .getTypedDeclarations()
+                                .some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember)
+                        ) {
+                            isInstanceMember = false;
+                        }
 
                         // For data classes and typed dicts, variables that are declared
                         // within the class are treated as instance variables. This distinction
@@ -3789,6 +3813,17 @@ export class TypeVarTransformer {
                 }
             }
 
+            const metaclassConstraint = TypeBase.getMetaclassConstraint(type);
+            if (metaclassConstraint && replacementType !== type) {
+                replacementType = mapSubtypes(replacementType, (subtype) => {
+                    if (!TypeBase.isInstantiable(subtype) || TypeBase.getInstantiableDepth(subtype) !== 0) {
+                        return subtype;
+                    }
+                    const constrained = TypeBase.cloneType(subtype);
+                    TypeBase.addProps(constrained).metaclassConstraint = metaclassConstraint;
+                    return constrained;
+                });
+            }
             return replacementType;
         }
 

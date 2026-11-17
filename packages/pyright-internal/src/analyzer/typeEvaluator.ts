@@ -327,6 +327,7 @@ import {
     getSpecializedTupleType,
     getTypeCondition,
     getTypeVarArgsRecursive,
+    getEffectiveMetaclass,
     getTypeVarScopeId,
     getTypeVarScopeIds,
     getUnknownForTypeVar,
@@ -2533,7 +2534,7 @@ export function createTypeEvaluator(
         // If the objectType is a class itself, then the class used to instantiate
         // it is the metaclass.
         const objectTypeIsInstantiable = TypeBase.isInstantiable(objectType);
-        const metaclass = objectType.shared.effectiveMetaclass;
+        const metaclass = getEffectiveMetaclass(objectType);
 
         let memberInfo: ClassMemberLookup | undefined;
 
@@ -3012,7 +3013,11 @@ export function createTypeEvaluator(
         selfType: ClassType | TypeVarType | undefined,
         errorNode: ExpressionNode
     ): Type | undefined {
-        let declaredType = getDeclaredTypeOfSymbol(symbol)?.type;
+        let declaredType = getDeclaredTypeOfSymbol(
+            symbol,
+            /* usageNode */ undefined,
+            classOrObjectBase ? isClassInstance(classOrObjectBase) : undefined
+        )?.type;
         if (!declaredType) {
             return undefined;
         }
@@ -4617,6 +4622,10 @@ export function createTypeEvaluator(
                         if (TypeBase.isInstantiable(subtype)) {
                             constraintType = convertToInstantiable(constraintType);
                         }
+                        if (TypeBase.getMetaclassConstraint(subtype)) {
+                            constraintType = TypeBase.cloneType(constraintType);
+                            TypeBase.addProps(constraintType).metaclassConstraint = subtype.props?.metaclassConstraint;
+                        }
 
                         typesToCombine.push(
                             addConditionToType(constraintType, [{ typeVar: subtype, constraintIndex }])
@@ -4645,6 +4654,10 @@ export function createTypeEvaluator(
                 }
 
                 boundType = TypeBase.isInstantiable(subtype) ? convertToInstantiable(boundType) : boundType;
+                if (TypeBase.getMetaclassConstraint(subtype)) {
+                    boundType = TypeBase.cloneType(boundType);
+                    TypeBase.addProps(boundType).metaclassConstraint = subtype.props?.metaclassConstraint;
+                }
 
                 return addConditionToType(boundType, [{ typeVar: subtype, constraintIndex: 0 }]);
             }
@@ -6294,13 +6307,24 @@ export function createTypeEvaluator(
                 }
 
                 if (!typeResult) {
+                    const superMember =
+                        (baseTypeResult.isSuperMemberAccess || (isClass(baseType) && baseType.priv.isSuperProxy)) &&
+                        isClass(baseType)
+                            ? lookUpClassMember(baseType, memberName)
+                            : undefined;
+                    const hasInstanceShadow = superMember?.symbol
+                        .getTypedDeclarations()
+                        .some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember);
                     typeResult = getTypeOfBoundMember(
                         node.d.member,
                         baseType,
                         memberName,
                         usage,
                         diag,
-                        (flags & EvalFlags.TypeExpression) === 0 ? undefined : MemberAccessFlags.TypeExpression,
+                        ((flags & EvalFlags.TypeExpression) === 0
+                            ? MemberAccessFlags.Default
+                            : MemberAccessFlags.TypeExpression) |
+                            (hasInstanceShadow ? MemberAccessFlags.SkipInstanceMembers : MemberAccessFlags.Default),
                         baseTypeResult.bindToSelfType
                     );
                 }
@@ -6695,7 +6719,7 @@ export function createTypeEvaluator(
                         classType
                     )
                 ) {
-                    type = getDeclaredTypeOfSymbol(memberInfo.symbol)?.type;
+                    type = getDeclaredTypeOfSymbol(memberInfo.symbol, undefined, memberInfo.isInstanceMember)?.type;
                     if (type && isInstantiableClass(memberInfo.classType)) {
                         type = partiallySpecializeType(
                             type,
@@ -6904,12 +6928,34 @@ export function createTypeEvaluator(
             { retainTypeAlias: true }
         );
 
+        if (usage.method === 'set' && isAccessedThroughObject) {
+            const declarations = memberInfo.symbol.getTypedDeclarations();
+            const hasInstanceMethodShadow =
+                declarations.some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember) &&
+                declarations.some((decl) => decl.type === DeclarationType.Function && decl.isMethod);
+            const slots = hasInstanceMethodShadow ? ClassType.getInheritedSlotsNames(classType) : undefined;
+            if (slots && !slots.includes('__dict__')) {
+                diag?.addMessage(LocMessage.slotsAttributeError().format({ name: memberName }));
+                isDescriptorError = true;
+            }
+        }
+
         if (!isDescriptorError && usage.method === 'set' && usage.setType) {
             if (errorNode && memberInfo.symbol.hasTypedDeclarations()) {
                 // This is an assignment to a member with a declared type. Apply
                 // narrowing logic based on the assigned type. Skip this for
                 // descriptor-based accesses.
-                narrowedTypeForSet = isDescriptorApplied
+                const hasInstanceMethodShadow =
+                    memberInfo.isInstanceMember &&
+                    memberInfo.symbol
+                        .getTypedDeclarations()
+                        .some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember) &&
+                    memberInfo.symbol
+                        .getTypedDeclarations()
+                        .some((decl) => decl.type === DeclarationType.Function && decl.isMethod);
+                narrowedTypeForSet = hasInstanceMethodShadow
+                    ? type
+                    : isDescriptorApplied
                     ? usage.setType.type
                     : narrowTypeBasedOnAssignment(type, usage.setType).type;
             }
@@ -9798,6 +9844,15 @@ export function createTypeEvaluator(
                             LocMessage.superCallZeroArgFormStaticMethod(),
                             node.d.leftExpr
                         );
+                    } else if (
+                        ParseTreeUtils.getEnclosingClass(enclosingFunction, /* stopAtFunction */ true) &&
+                        enclosingFunction.d.params[0]?.d.category !== ParamCategory.Simple
+                    ) {
+                        addDiagnostic(
+                            DiagnosticRule.reportGeneralTypeIssues,
+                            LocMessage.superCallZeroArgFormNoPositionalParam(),
+                            node.d.leftExpr
+                        );
                     }
                 }
             } else {
@@ -10048,7 +10103,7 @@ export function createTypeEvaluator(
 
             const type = resultIsInstance ? convertToInstance(resultType, /* includeSubclasses */ false) : resultType;
 
-            return { type, bindToSelfType };
+            return { type: markSuperProxy(type), bindToSelfType, isSuperMemberAccess: true };
         }
 
         // Handle the super() call when used outside of a member access expression.
@@ -10087,7 +10142,11 @@ export function createTypeEvaluator(
                     if (isInstantiableClass(nextBaseClassType)) {
                         nextBaseClassType = specializeForBaseClass(bindToType, nextBaseClassType);
                     }
-                    return { type: resultIsInstance ? convertToInstance(nextBaseClassType) : nextBaseClassType };
+                    return {
+                        type: markSuperProxy(
+                            resultIsInstance ? convertToInstance(nextBaseClassType) : nextBaseClassType
+                        ),
+                    };
                 }
 
                 // There's not much we can say about the type. Simply return object or type.
@@ -11997,7 +12056,7 @@ export function createTypeEvaluator(
         // the constructed type back to the TypeVar. For example, if
         // we have `cls: Type[_T]` followed by `_T()`.
         if (isTypeVar(unexpandedCallType)) {
-            returnType = convertToInstance(unexpandedCallType);
+            returnType = convertToInstance(TypeBase.cloneWithoutMetaclassConstraint(unexpandedCallType));
         }
 
         // If we instantiated the "deprecated" class, attach the deprecation
@@ -12123,7 +12182,7 @@ export function createTypeEvaluator(
         ) {
             // Handle the case where a type[T] is being called. We presume this
             // will instantiate an object of type T.
-            returnType = convertToInstance(unexpandedCallType);
+            returnType = convertToInstance(TypeBase.cloneWithoutMetaclassConstraint(unexpandedCallType));
         }
 
         return {
@@ -20679,6 +20738,23 @@ export function createTypeEvaluator(
 
                 paramType = paramType ?? UnknownType.create();
 
+                if (
+                    index === 0 &&
+                    paramTypeNode &&
+                    param.d.category === ParamCategory.Simple &&
+                    containingClassType &&
+                    isInstantiableMetaclass(containingClassType) &&
+                    !ClassType.isBuiltIn(containingClassType, 'type') &&
+                    FunctionType.isInstanceMethod(functionType) &&
+                    node.d.name.d.value !== '__new__' &&
+                    isTypeVar(paramType) &&
+                    TypeBase.isInstantiable(paramType) &&
+                    TypeBase.getInstantiableDepth(paramType) === 0
+                ) {
+                    paramType = TypeBase.cloneType(paramType);
+                    TypeBase.addProps(paramType).metaclassConstraint = ClassType.cloneAsInstance(containingClassType);
+                }
+
                 const functionParam = FunctionParam.create(
                     param.d.category,
                     paramType,
@@ -24735,13 +24811,14 @@ export function createTypeEvaluator(
     function getEffectiveTypeOfSymbolForUsage(
         symbol: Symbol,
         usageNode?: NameNode,
-        useLastDecl = false
+        useLastDecl = false,
+        isInstanceMember?: boolean
     ): EffectiveTypeResult {
         let declaredTypeInfo: DeclaredSymbolTypeInfo | undefined;
 
         // If there's a declared type, it takes precedence over inferred types.
         if (symbol.hasTypedDeclarations()) {
-            declaredTypeInfo = getDeclaredTypeOfSymbol(symbol, usageNode);
+            declaredTypeInfo = getDeclaredTypeOfSymbol(symbol, usageNode, isInstanceMember);
             const declaredType = declaredTypeInfo?.type;
 
             let isIncomplete = false;
@@ -24756,7 +24833,7 @@ export function createTypeEvaluator(
             // If the "declared" type uses a "TypeAlias" type annotation, then
             // we need to use the inferred type path to evaluate its type.
             if (declaredType || !declaredTypeInfo.isTypeAlias) {
-                const typedDecls = symbol.getTypedDeclarations();
+                const typedDecls = getMemberTypedDeclarations(symbol, isInstanceMember);
 
                 // If we received an undefined declared type, this can be caused by
                 // exceeding the max number of type declarations, speculative
@@ -25092,13 +25169,137 @@ export function createTypeEvaluator(
     // cases, non-type information (such as Final or ClassVar attributes) may be
     // provided, but type inference is still required. In such cases, the attributes
     // are returned as flags.
-    function getDeclaredTypeOfSymbol(symbol: Symbol, usageNode?: NameNode): DeclaredSymbolTypeInfo {
+    function markSuperProxy(type: Type): Type {
+        if (!isClass(type)) {
+            return type;
+        }
+        const proxy = TypeBase.cloneType(type);
+        proxy.priv = { ...type.priv, isSuperProxy: true };
+        return proxy;
+    }
+
+    function isInstanceMethodShadowDeclaration(instanceDecl: Declaration, methodDecl: Declaration): boolean {
+        if (
+            instanceDecl.type !== DeclarationType.Variable ||
+            !instanceDecl.isInstanceMember ||
+            instanceDecl.isFinal ||
+            methodDecl.type !== DeclarationType.Function ||
+            !methodDecl.isMethod
+        ) {
+            return false;
+        }
+        const owner = ParseTreeUtils.getEnclosingClass(instanceDecl.node);
+        if (!owner || owner !== ParseTreeUtils.getEnclosingClass(methodDecl.node)) {
+            return false;
+        }
+        const classType = getTypeOfClass(owner)?.classType;
+        const functionType = getTypeOfFunction(methodDecl.node)?.decoratedType;
+        if (
+            !classType ||
+            !functionType ||
+            !isFunction(functionType) ||
+            FunctionType.isStaticMethod(functionType) ||
+            FunctionType.isClassMethod(functionType) ||
+            FunctionType.isFinal(functionType)
+        ) {
+            return false;
+        }
+        const slots = ClassType.getInheritedSlotsNames(classType);
+        if (slots && !slots.includes('__dict__')) {
+            return false;
+        }
+        const boundMethod = bindFunctionToClassOrObject(ClassType.cloneAsInstance(classType), functionType);
+        const contract = getTypeForDeclaration(instanceDecl)?.type;
+        if (contract) {
+            const variables = getTypeVarArgsRecursive(makeTypeVarsFree(contract, getTypeVarScopeIds(classType)));
+            if (variables.some((variable) => TypeVarType.isSelf(variable))) {
+                return false;
+            }
+            if (
+                classType.shared.typeParams.some(
+                    (param) =>
+                        (param.shared.declaredVariance === Variance.Covariant ||
+                            param.shared.declaredVariance === Variance.Contravariant) &&
+                        variables.some((variable) => isTypeSame(variable, param, { ignoreTypeFlags: true }))
+                )
+            ) {
+                return false;
+            }
+        }
+        return !!boundMethod && !!contract && isWritableMethodContractCompatible(contract, boundMethod);
+    }
+
+    function isWritableMethodContractCompatible(contract: Type, boundMethod: FunctionType | OverloadedType): boolean {
+        if (contract && isClassInstance(contract)) {
+            const callback = getCallbackProtocolType(contract);
+            if (!callback) {
+                return false;
+            }
+            contract = callback;
+        }
+        if (!boundMethod || !isFunction(boundMethod) || !contract || !isFunction(contract)) {
+            return false;
+        }
+        getEffectiveReturnType(boundMethod);
+        if (containsAnyOrUnknown(contract, true) || containsAnyOrUnknown(boundMethod, true)) {
+            return false;
+        }
+
+        // Callable[[...], R] omits positional parameter names. Preserve named
+        // callback protocols while comparing the writable parameter/result types
+        // in both directions.
+        const positionalView = FunctionType.clone(boundMethod);
+        positionalView.shared.parameters = boundMethod.shared.parameters.map((param, index) => {
+            const declaredParam = contract.shared.parameters[index];
+            return declaredParam && FunctionParam.isNameSynthesized(declaredParam)
+                ? { ...param, name: `__p${index}`, flags: param.flags | FunctionParamFlags.NameSynthesized }
+                : param;
+        });
+        return assignType(contract, boundMethod) && assignType(positionalView, contract);
+    }
+
+    function getMemberTypedDeclarations(symbol: Symbol, isInstanceMember?: boolean): Declaration[] {
+        const decls = symbol.getTypedDeclarations();
+        if (
+            isInstanceMember === undefined ||
+            !decls.some((decl) => decl.type === DeclarationType.Function && decl.isMethod) ||
+            !decls.some((decl) => decl.type === DeclarationType.Variable && decl.isInstanceMember)
+        ) {
+            return decls;
+        }
+        const classDecls = decls.filter((decl) => !(decl.type === DeclarationType.Variable && decl.isInstanceMember));
+        if (isInstanceMember) {
+            const method = [...classDecls].reverse().find((decl) => decl.type === DeclarationType.Function);
+            const decoratedType =
+                method?.type === DeclarationType.Function ? getTypeOfFunction(method.node)?.decoratedType : undefined;
+            if (
+                !decoratedType ||
+                !isFunctionOrOverloaded(decoratedType) ||
+                (isFunction(decoratedType) &&
+                    (FunctionType.isFinal(decoratedType) ||
+                        FunctionType.isClassMethod(decoratedType) ||
+                        FunctionType.isStaticMethod(decoratedType)))
+            ) {
+                return classDecls;
+            }
+        }
+        return decls.filter((decl) => {
+            const instanceDeclaration = decl.type === DeclarationType.Variable && !!decl.isInstanceMember;
+            return isInstanceMember ? instanceDeclaration : !instanceDeclaration;
+        });
+    }
+
+    function getDeclaredTypeOfSymbol(
+        symbol: Symbol,
+        usageNode?: NameNode,
+        isInstanceMember?: boolean
+    ): DeclaredSymbolTypeInfo {
         const synthesizedType = symbol.getSynthesizedType()?.type;
         if (synthesizedType) {
             return { type: synthesizedType };
         }
 
-        let typedDecls = symbol.getTypedDeclarations();
+        let typedDecls = getMemberTypedDeclarations(symbol, isInstanceMember);
 
         if (typedDecls.length === 0) {
             // If the symbol has no type declaration but is assigned many times,
@@ -25594,7 +25795,7 @@ export function createTypeEvaluator(
     function getTypeOfMember(member: ClassMember): Type {
         if (isInstantiableClass(member.classType)) {
             return partiallySpecializeType(
-                getEffectiveTypeOfSymbol(member.symbol),
+                getEffectiveTypeOfSymbolForUsage(member.symbol, undefined, false, member.isInstanceMember).type,
                 member.classType,
                 getTypeClassType(),
                 /* selfClass */ undefined
@@ -25620,7 +25821,7 @@ export function createTypeEvaluator(
             return undefined;
         }
 
-        const typeResult = getEffectiveTypeOfSymbolForUsage(member.symbol);
+        const typeResult = getEffectiveTypeOfSymbolForUsage(member.symbol, undefined, false, member.isInstanceMember);
 
         if (!typeResult) {
             return undefined;
@@ -25938,7 +26139,12 @@ export function createTypeEvaluator(
                 const memberInfo = lookUpClassMember(srcType, name);
                 assert(memberInfo !== undefined);
 
-                let destMemberType = getEffectiveTypeOfSymbol(symbol);
+                let destMemberType = getEffectiveTypeOfSymbolForUsage(
+                    symbol,
+                    undefined,
+                    false,
+                    memberInfo.isInstanceMember
+                ).type;
                 const srcMemberType = getTypeOfMember(memberInfo);
                 destMemberType = partiallySpecializeType(destMemberType, destType, getTypeClassType());
 
@@ -25965,7 +26171,15 @@ export function createTypeEvaluator(
                         isAssignable = false;
                     }
                 } else {
-                    const primaryDecl = symbol.getDeclarations()[0];
+                    const primaryDecl =
+                        symbol
+                            .getDeclarations()
+                            .find(
+                                (decl) =>
+                                    decl.type === DeclarationType.Variable &&
+                                    decl.isInstanceMember &&
+                                    decl.typeAnnotationNode
+                            ) ?? symbol.getDeclarations()[0];
 
                     let flags = AssignTypeFlags.Default;
                     if (
@@ -26344,6 +26558,69 @@ export function createTypeEvaluator(
     // matched against existing type variables in the map. If a type variable
     // in the dest type is not in the type map already, it is assigned a type
     // and added to the map.
+    function satisfiesMetaclassConstraint(source: Type, constraint: ClassType, recursionCount: number): boolean {
+        if (recursionCount > maxTypeRecursionCount) {
+            return false;
+        }
+        let compatible = true;
+        doForEachSubtype(source, (subtype) => {
+            if (!compatible || isAnyOrUnknown(subtype)) {
+                return;
+            }
+            const sourceConstraint = TypeBase.getMetaclassConstraint(subtype);
+            if (sourceConstraint) {
+                compatible =
+                    ClassType.isDerivedFrom(
+                        ClassType.cloneAsInstantiable(sourceConstraint),
+                        ClassType.cloneAsInstantiable(constraint)
+                    ) &&
+                    assignType(
+                        constraint,
+                        sourceConstraint,
+                        undefined,
+                        undefined,
+                        AssignTypeFlags.Default,
+                        recursionCount + 1
+                    );
+                return;
+            }
+            if (isTypeVar(subtype)) {
+                const concrete = makeTopLevelTypeVarsConcrete(subtype);
+                compatible =
+                    concrete !== subtype && satisfiesMetaclassConstraint(concrete, constraint, recursionCount + 1);
+                return;
+            }
+            if (isClassInstance(subtype) && isMetaclassInstance(subtype)) {
+                compatible =
+                    ClassType.isDerivedFrom(
+                        ClassType.cloneAsInstantiable(subtype),
+                        ClassType.cloneAsInstantiable(constraint)
+                    ) &&
+                    assignType(constraint, subtype, undefined, undefined, AssignTypeFlags.Default, recursionCount + 1);
+                return;
+            }
+            if (isInstantiableClass(subtype)) {
+                const metaclass = getEffectiveMetaclass(subtype);
+                compatible =
+                    !!metaclass &&
+                    (isAnyOrUnknown(metaclass) ||
+                        (isInstantiableClass(metaclass) &&
+                            ClassType.isDerivedFrom(metaclass, ClassType.cloneAsInstantiable(constraint)) &&
+                            assignType(
+                                constraint,
+                                ClassType.cloneAsInstance(metaclass),
+                                undefined,
+                                undefined,
+                                AssignTypeFlags.Default,
+                                recursionCount + 1
+                            )));
+                return;
+            }
+            compatible = false;
+        });
+        return compatible;
+    }
+
     function assignType(
         destType: Type,
         srcType: Type,
@@ -26412,6 +26689,30 @@ export function createTypeEvaluator(
             return true;
         }
         recursionCount++;
+
+        const metaclassConstraint = TypeBase.getMetaclassConstraint(destType);
+        if (metaclassConstraint && !satisfiesMetaclassConstraint(srcType, metaclassConstraint, recursionCount)) {
+            diag?.addMessage(
+                LocAddendum.typeIncompatible().format({
+                    sourceType: printType(srcType),
+                    destType: printType(metaclassConstraint),
+                })
+            );
+            return false;
+        }
+
+        // A metaclass-qualified T is a refinement of the same unqualified T.
+        // Keep qualifications for distinct inference variables and union members.
+        if (
+            !destType.props?.metaclassConstraint &&
+            srcType.props?.metaclassConstraint &&
+            isTypeVar(destType) &&
+            isTypeVar(srcType) &&
+            destType.priv.scopeId === srcType.priv.scopeId &&
+            destType.priv.nameWithScope === srcType.priv.nameWithScope
+        ) {
+            srcType = TypeBase.cloneWithoutMetaclassConstraint(srcType);
+        }
 
         // If the source and dest refer to the recursive type aliases, handle
         // the case specially to avoid recursing down both type aliases.
@@ -30704,6 +31005,8 @@ export function createTypeEvaluator(
         getBestOverloadForArgs,
         getBuiltInType,
         getTypeOfMember,
+        isInstanceMethodShadowDeclaration,
+        isWritableMethodContractCompatible,
         getTypeOfBoundMember,
         getBoundMagicMethod,
         getTypeOfMagicMethodCall,
