@@ -109,6 +109,27 @@ test('OverloadOverride1', () => {
     TestUtils.validateResults(analysisResults, 1);
 });
 
+test('OverloadOverrideSpecialization1', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['overloadOverrideSpecialization1.py']);
+    TestUtils.validateResults(analysisResults, 0);
+});
+
+test('OverloadOverrideSpecialization2', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['overloadOverrideSpecialization2.py']);
+    TestUtils.validateResults(analysisResults, 6);
+    assert.deepStrictEqual(
+        analysisResults[0].errors.map((error) => [error.range.start.line + 1, error.getRule()]),
+        [
+            [20, 'reportIncompatibleMethodOverride'],
+            [29, 'reportIncompatibleMethodOverride'],
+            [35, 'reportOverlappingOverload'],
+            [40, 'reportIncompatibleMethodOverride'],
+            [49, 'reportIncompatibleMethodOverride'],
+            [69, 'reportIncompatibleMethodOverride'],
+        ]
+    );
+});
+
 test('OverloadImpl1', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['overloadImpl1.py']);
     TestUtils.validateResults(analysisResults, 6);
